@@ -5,10 +5,10 @@
 #            	Yacouba Bamba
 #            	Moussa Fofana 
 #            	Tairou Ouro-Bawinay
-#       date:	2020-10-24 t13:07Z
+#       date:	2020-10-24 t17:37Z
 #        for:	ECE 4612
 #            	MIPS_Assignment2
-#    version:	v2.0
+#    version:	v2.1
 ######################################################################
 # 3-check-matlab.asm
 # This program validates a Matlab expression.
@@ -25,6 +25,9 @@
 #
 # ChangeLog
 ######################################################################
+# 	v2.1 - 2020-10-24 t17:37Z
+# 		Parsed numbers.
+#
 # 	v2.0 - 2020-10-24 t14:51Z
 # 		Limited to 4 operators, 4 digit operands.
 #
@@ -62,10 +65,17 @@
 .eqv	maxOptrsP1	5	# maximum number of operators + 1
 .eqv	maxDigitsP1	5	# maximum number of digits per operand + 1
 
+# evaluation constants
+# flags
+.eqv	inOperand	1	# evaluation inside an operand
+
 .text	# the code block
 
 # Accept a uster string and save it.
 inpChk:
+	# $s0 := address of input buffer
+	# $s1 := error character number
+	#
 	# display the prompt
 	la	$a0, matPrompt           	# load the address of prompt buffer (null terminated)
 	addi	$v0, $zero, print        	# print command
@@ -76,15 +86,14 @@ inpChkInput:
 	la	$a1, inpStr              	# load the  length of input buffer
 	addi	$v0, $zero, strinput     	# string input command
 	syscall	# accept the matlab expression
+	la	$s0, inpStr              	# store the address of the input buffer
 inpChkValidate:
 	# validate the string
-	la	$a0, inpStr              	# load the address of the input buffer
+	or	$a0, $zero, $s0          	# copy address into argument $a0
 	jal	matchk                   	# call matchk
-	beq	$v0, $zero, inpChkInvalid	# if (valid string)
-	la	$a0, valMessage          	# load address of valid message
-	la	$a1, valMessage          	# load  length of valid message
-	addi	$v0, $zero, print        	# print command
-	syscall	# print the message
+	beq	$v0, $zero, inpChkInvalid	# if (valid string) else go to print the invalid message
+	or	$a0, $zero, $s0          	# copy address into argument $a0
+	jal	matevl                   	# call matevl
 	j	inpChkOutput             	# finish the loop
 inpChkInvalid:
 	la	$a0, invMessage          	# load address of invalid message
@@ -96,8 +105,8 @@ inpChkIndex:	# used for debugging
 	addi	$v0, $zero, print        	# print command
 	syscall	# print the message
 	la	$a1, invMessage          	# load  length of invalid message
-	add	$s0, $v1, $zero          	#  copy the error information
-	andi	$a0, $s0, lastchar       	#  copy line number to print
+	or	$s1, $zero, $v1          	#  copy the error information
+	andi	$a0, $s1, lastchar       	#  copy line number to print
 	addi	$v0, $zero, intprint     	# print line number
 	syscall	# print the line number
 	j	inpChkOutput             	# finish the loop
@@ -108,6 +117,78 @@ inpChkOutput:
 	j	inpChk                   	# repeat the program
 # end inpChk
 
+
+######################################################################
+# Evaluates a Matlab expression.
+#
+matevl:
+	# $t0 := index, k
+	# $t1 := address, (X + k)
+	# $t2 := character, X[k]
+	# $t4 := flags
+	# $t6 := operand
+	# $t8 := arithmetic temp #0
+	# $t9 := arithmetic temp #1
+	and	$t4, $zero, $zero	# clear flags
+	or	$t0, $zero, $zero	# for k = 0,
+matEvlL1: # matlab evaluation loop 1
+	add	$t1, $t0, $a1		# find X + k
+	lb	$t2, 0($t1)		# get X[k] alias *(X + k)
+	beq	$t2, $zero, matEvlDone	# if (end of string), then done
+	ori	$t8, $zero, '\n'	# load newline
+	beq	$t2, $t8, matEvlDone	# if (X[k] == newline), then done
+matEvlChkTkOp:
+	# if token is an operand
+	sltiu	$t8, $t2, '0'			# if (X[k] < '0')
+	bne	$t8, $zero, matEvlTkNOp		#   not an operand;
+	sltiu	$t8, $t2, ':'			# if (X[k] <= '9')
+	bne	$t8, $zero, matEvlTkYOp		#   operand;
+	j	matEvlTkNOp			# not an operand;
+
+matEvlTkYOp:
+	andi	$t8, $t4, inOperand	# if (inOperand)
+	beq	$t8, $zero, matEvlTkYOpNiOp
+matEvlTkYOpYiOp: # token is an operand, and in an operand
+	or	$t8, $zero, $t6		# copy the operand so far
+	sll	$t9, $t8, 2		# $t9 = $t8 * 4, 4 = 2^2
+	add	$t8, $t8, $t9		# $t8 += $t9
+	sll	$t8, $t8, 1		# $t8 *= 2, 2 = 2^1
+	# the result is: $t8 = $t6 * 10;
+	subi	$t9, $t2, '0'		# convert the new character to an integer
+	add	$t6, $t8, $t9		# operand = (operand * 10) + (X[k] - '0')
+	j matEvlNext	# continue next loop run
+matEvlTkYOpNiOp: # token is an operand, but not in an operand
+	subi	$t6, $t2, '0'		# convert the new character to an integer
+	or	$t4, $t4, inOperand	# set the inOperand flag
+	j matEvlNext	# continue next loop run
+matEvlTkNOp: # token is not an operand
+	ori	$t8, $zero, inOperand	# store inOperand mask
+	nor	$t8, $t8, $t8		# invert
+	and	$t4, $t4, $t8		# clear the mask
+# print the new number
+	or	$a0, $zero, $t6		#  copy line number to print
+	addi	$v0, $zero, intprint	# print line number
+	syscall	# print the line number
+	addi	$a0, $zero, '\n'         	#  load newline
+	addi	$v0, $zero, chrprint     	# print newline
+	syscall	# print newline
+	j	matEvlNext		# continue
+matEvlNext:
+	addi	$t0, $t0, 1            	# ++k
+	j	matEvlL1               	# next k
+matEvlDone:
+# print the new number
+	or	$a0, $zero, $t6		#  copy line number to print
+	addi	$v0, $zero, intprint	# print line number
+	syscall	# print the line number
+	addi	$a0, $zero, '\n'         	#  load newline
+	addi	$v0, $zero, chrprint     	# print newline
+	syscall	# print newline
+rMatEvl:
+	jr	$ra	# return to caller
+
+
+######################################################################
 # Validates a Matlab expression.
 #
 # The following rules are allowed:
@@ -166,10 +247,10 @@ matchk: # matchk(char *X) : void
 	and	$v1, $zero, $zero      	# clear $v1
 	and	$t6, $zero, $zero      	# clear operator between flags
 	and	$t7, $zero, $zero      	# clear the digraph flags
-	or	$t0, $zero, $zero      	# for k = 0,
 	or	$t5, $zero, $zero      	# i_parentheses = 0
 	or	$t8, $zero, $zero      	# i_operators = 0
 	or	$t9, $zero, $zero      	# i_digits = 0
+	or	$t0, $zero, $zero      	# for k = 0,
 matChkL1:
 	add	$t1, $t0, $a1          	# find X + k
 	lb	$t2, 0($t1)            	# get X[k] alias *(X + k)
