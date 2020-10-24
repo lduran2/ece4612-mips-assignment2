@@ -5,10 +5,10 @@
 #            	Yacouba Bamba
 #            	Moussa Fofana 
 #            	Tairou Ouro-Bawinay
-#       date:	2020-10-24 t17:37Z
+#       date:	2020-10-24 t19:36Z
 #        for:	ECE 4612
 #            	MIPS_Assignment2
-#    version:	v2.1
+#    version:	v2.2
 ######################################################################
 # 3-check-matlab.asm
 # This program validates a Matlab expression.
@@ -25,6 +25,9 @@
 #
 # ChangeLog
 ######################################################################
+# 	v2.2 - 2020-10-24 t19:36Z
+# 		Parsed operators.
+#
 # 	v2.1 - 2020-10-24 t17:37Z
 # 		Parsed numbers.
 #
@@ -68,6 +71,8 @@
 # evaluation constants
 # flags
 .eqv	inOperand	1	# evaluation inside an operand
+.eqv	inOperator	2	# evaluation inside an operator
+.eqv	outputBufOptr	16384	# marks an output buffer element as an operator
 
 .text	# the code block
 
@@ -93,7 +98,7 @@ inpChkValidate:
 	jal	matchk                   	# call matchk
 	beq	$v0, $zero, inpChkInvalid	# if (valid string) else go to print the invalid message
 	or	$a0, $zero, $s0          	# copy address into argument $a0
-	jal	matevl                   	# call matevl
+	jal	mateva                   	# call mateva
 	j	inpChkOutput             	# finish the loop
 inpChkInvalid:
 	la	$a0, invMessage          	# load address of invalid message
@@ -121,70 +126,115 @@ inpChkOutput:
 ######################################################################
 # Evaluates a Matlab expression.
 #
-matevl:
+mateva:
 	# $t0 := index, k
 	# $t1 := address, (X + k)
 	# $t2 := character, X[k]
 	# $t4 := flags
-	# $t6 := operand
+	# $t5 := operand
+	# $t6 := output buffer pointer
+	# $t7 := initial stack pointer
 	# $t8 := arithmetic temp #0
 	# $t9 := arithmetic temp #1
 	and	$t4, $zero, $zero	# clear flags
+	la	$t6, outputBuf		# load the address of the output buffer
+	or	$t7, $t7, $sp		# copy the stack pointer
 	or	$t0, $zero, $zero	# for k = 0,
-matEvlL1: # matlab evaluation loop 1
+matEvaL1: # matlab evaluation loop 1
 	add	$t1, $t0, $a1		# find X + k
 	lb	$t2, 0($t1)		# get X[k] alias *(X + k)
-	beq	$t2, $zero, matEvlDone	# if (end of string), then done
+	beq	$t2, $zero, matEvaDone	# if (end of string), then done
 	ori	$t8, $zero, '\n'	# load newline
-	beq	$t2, $t8, matEvlDone	# if (X[k] == newline), then done
-matEvlChkTkOp:
+	beq	$t2, $t8, matEvaDone	# if (X[k] == newline), then done
+matEvaChkTkOpnd:
 	# if token is an operand
 	sltiu	$t8, $t2, '0'			# if (X[k] < '0')
-	bne	$t8, $zero, matEvlTkNOp		#   not an operand;
+	bne	$t8, $zero, matEvaTkNOpnd	#   not an operand;
 	sltiu	$t8, $t2, ':'			# if (X[k] <= '9')
-	bne	$t8, $zero, matEvlTkYOp		#   operand;
-	j	matEvlTkNOp			# not an operand;
+	bne	$t8, $zero, matEvaTkYOpnd	#   operand;
+	j	matEvaTkNOpnd			# not an operand;
 
-matEvlTkYOp:
+matEvaTkYOpnd:
 	andi	$t8, $t4, inOperand	# if (inOperand)
-	beq	$t8, $zero, matEvlTkYOpNiOp
-matEvlTkYOpYiOp: # token is an operand, and in an operand
-	or	$t8, $zero, $t6		# copy the operand so far
+	beq	$t8, $zero, matEvaTkYOpndNiOpnd
+matEvaTkYOpndYiOpnd: # token is an operand, and in an operand
+	or	$t8, $zero, $t5		# copy the operand so far
 	sll	$t9, $t8, 2		# $t9 = $t8 * 4, 4 = 2^2
 	add	$t8, $t8, $t9		# $t8 += $t9
 	sll	$t8, $t8, 1		# $t8 *= 2, 2 = 2^1
-	# the result is: $t8 = $t6 * 10;
+	# the result is: $t8 = $t5 * 10;
 	subi	$t9, $t2, '0'		# convert the new character to an integer
-	add	$t6, $t8, $t9		# operand = (operand * 10) + (X[k] - '0')
-	j matEvlNext	# continue next loop run
-matEvlTkYOpNiOp: # token is an operand, but not in an operand
-	subi	$t6, $t2, '0'		# convert the new character to an integer
+	add	$t5, $t8, $t9		# operand = (operand * 10) + (X[k] - '0')
+	j matEvaNext	# continue next loop run
+# otherwise
+matEvaTkYOpndNiOpnd: # token is an operand, but not in an operand
+	subi	$t5, $t2, '0'		# convert the new character to an integer
 	or	$t4, $t4, inOperand	# set the inOperand flag
-	j matEvlNext	# continue next loop run
-matEvlTkNOp: # token is not an operand
+	j matEvaNext	# continue next loop run
+matEvaTkNOpnd: # token is not an operand
+	andi	$t8, $t4, inOperand	# if (inOperand)
+	beq	$t8, $zero, matEvaTkNOpndNiOpnd
+matEvaTkNOpndYiOpnd: # token is not an operand, but in an operand
+	sw	$t5, 0($t6)		# store the last operand
+	addi	$t6, $t6, 4		# next location in the output buffer
+	# fall through
+matEvaTkNOpndNiOpnd: # token is not an operand, and not in an operand
 	ori	$t8, $zero, inOperand	# store inOperand mask
 	nor	$t8, $t8, $t8		# invert
 	and	$t4, $t4, $t8		# clear the mask
-# print the new number
-	or	$a0, $zero, $t6		#  copy line number to print
-	addi	$v0, $zero, intprint	# print line number
-	syscall	# print the line number
-	addi	$a0, $zero, '\n'         	#  load newline
-	addi	$v0, $zero, chrprint     	# print newline
-	syscall	# print newline
-	j	matEvlNext		# continue
-matEvlNext:
+matEvaChkTkOptrP2: # check if an operator priority 2
+	ori	$t8, $zero, '*'			# if ('*'
+	beq	$t2, $t8, matEvaTkYOptrP2	#   == X[k]) operator;
+	ori	$t8, $zero, '/'			# if ('/'
+	beq	$t2, $t8, matEvaTkYOptrP2	#   == X[k]) operator;
+matEvaChkTkOptrP1: # check if an operator priority 1
+	ori	$t8, $zero, '+'			# if ('+'
+	beq	$t2, $t8, matEvaTkYOptrP1	#   == X[k]) operator;
+	ori	$t8, $zero, '-'			# if ('-'
+	beq	$t2, $t8, matEvaTkYOptrP1	#   == X[k]) operator;
+	j matEvaTkNOptr	# otherwise, it's not an operator
+matEvaTkYOptrP2: # all operators are >= priority
+matEvaTkYOptrP2L2: # stop if +/-
+	beq	$sp, $t7, matEvaTkYOptrP1L2end	# exit the loop if stack is empty
+	lw	$t5, 0($sp)		# pop an operator
+	ori	$t8, $zero, '+'			# if ('+'
+	beq	$t5, $t8, matEvaTkYOptrP1L2end	#   == X[k]) stop;
+	ori	$t8, $zero, '-'			# if ('-'
+	beq	$t5, $t8, matEvaTkYOptrP1L2end	#   == X[k]) stop;
+	addi	$sp, $sp, 4		# move stack pointer
+	ori	$t5, outputBufOptr	# flag as operator
+	sw	$t5, 0($t6)		# store the next operator
+	addi	$t6, $t6, 4		# next location in the output buffer
+	j	matEvaTkYOptrP1L2	# next element in stack
+matEvaTkYOptrP2L2end:
+	j	matEvaTkYOptrP1L2end	# jump to after both loops
+matEvaTkYOptrP1: # all operators are >= priority
+matEvaTkYOptrP1L2:
+	beq	$sp, $t7, matEvaTkYOptrP1L2end	# exit the loop if stack is empty
+	lw	$t5, 0($sp)		# pop an operator
+	addi	$sp, $sp, 4		# move stack pointer
+	ori	$t5, outputBufOptr	# flag as operator
+	sw	$t5, 0($t6)		# store the next operator
+	addi	$t6, $t6, 4		# next location in the output buffer
+	j	matEvaTkYOptrP1L2	# next element in stack
+matEvaTkYOptrP1L2end:
+	addi	$sp, $sp, -4	# move stack pointer to push an operator
+	sw	$t2, 0($sp)	# push an operator
+	j matEvaNext	# continue next loop run
+matEvaTkNOptr: # token is not an operator
+	j matEvaNext	# continue next loop run
+matEvaNext:
 	addi	$t0, $t0, 1            	# ++k
-	j	matEvlL1               	# next k
-matEvlDone:
-# print the new number
-	or	$a0, $zero, $t6		#  copy line number to print
-	addi	$v0, $zero, intprint	# print line number
-	syscall	# print the line number
-	addi	$a0, $zero, '\n'         	#  load newline
-	addi	$v0, $zero, chrprint     	# print newline
-	syscall	# print newline
-rMatEvl:
+	j	matEvaL1               	# next k
+matEvaDone:	# pop the rest of the tokens
+	beq	$sp, $t7, rMatEva	# exit the loop if stack is empty
+	lw	$t5, 0($sp)		# pop an operator
+	addi	$sp, $sp, 4		# move stack pointer
+	ori	$t5, outputBufOptr	# flag as operator
+	sw	$t5, 0($t6)		# store the next operator
+	addi	$t6, $t6, 4		# next location in the output buffer
+	j	matEvaDone	# next element in stack
+rMatEva:
 	jr	$ra	# return to caller
 
 
@@ -301,7 +351,8 @@ matChkCharR20:	# character round 20 [/-9]
 	bne	$t3, $zero, matChkOpnd 	#   operand;
 matChkCharEqu:	# character =
 	ori	$t4, $zero, '='        	# load '='
-	beq	$t2, $t4, matChkEqls   	# if (X[k] == '=') equals;
+	# '=' used for assignment
+	# beq	$t2, $t4, matChkEqls   	# if (X[k] == '=') equals;
 matChkCharEl:	# matched none of the classes
 	j	matChkInval            	# else invalid string;
 #
@@ -367,4 +418,5 @@ matChkPlMn:	# character is plus or minus
 invMessage:	.ascii "Invalid input\0\0\0"	# output for invalid input
 valMessage:	.ascii "Valid input\0"      	# the input buffer
 linePrompt:	.ascii " at: \0\0\0"      	# the prompt for line number
+ outputBuf:	.space 64	# the output buffer
 # end .data
